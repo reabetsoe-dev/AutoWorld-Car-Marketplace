@@ -3,11 +3,13 @@ require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
+const helmet = require("helmet");
 const authRoutes = require("./routes/auth");
 const adminRoutes = require("./routes/admin");
 const carRoutes = require("./routes/cars");
 
 const app = express();
+app.disable("x-powered-by");
 
 function parseCsvEnv(value) {
   return String(value || "")
@@ -36,9 +38,17 @@ function buildCorsOptions() {
 }
 
 app.set("trust proxy", 1);
+
 app.use(
-  cors(buildCorsOptions())
+  helmet({
+    crossOriginResourcePolicy: {
+      policy: "cross-origin"
+    }
+  })
 );
+
+app.use(cors(buildCorsOptions()));
+
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/health", (_req, res) => {
@@ -69,14 +79,20 @@ app.use((_req, res) => {
 
 async function startServer() {
   try {
-    const mongoUri =
-      process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/autoworld";
+    const mongoUri = process.env.MONGODB_URI;
+
+    if (!mongoUri) {
+      throw new Error("MONGODB_URI environment variable is missing.");
+    }
 
     await mongoose.connect(mongoUri, {
       serverSelectionTimeoutMS: Number(process.env.MONGODB_TIMEOUT_MS) || 10000
     });
+
     // eslint-disable-next-line no-console
-    console.log("MongoDB connected");
+    console.log(
+  `MongoDB connected (${process.env.NODE_ENV || "development"})`
+);
 
     const port = Number(process.env.PORT) || 5000;
     app.listen(port, () => {
@@ -91,3 +107,13 @@ async function startServer() {
 }
 
 startServer();
+
+process.on("SIGINT", async () => {
+  console.log("Shutting down server...");
+
+  await mongoose.connection.close();
+
+  console.log("MongoDB connection closed.");
+
+  process.exit(0);
+});
