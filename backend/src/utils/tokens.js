@@ -1,7 +1,10 @@
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
-const RefreshToken = require("../models/RefreshToken");
 const { normalizeRole } = require("../constants/roles");
+const {
+  createRefreshTokenRecord,
+  revokeRefreshTokenByHash
+} = require("../repositories/refreshTokens");
 
 function now() {
   return new Date();
@@ -29,20 +32,30 @@ function generateRefreshTokenValue() {
   return crypto.randomBytes(refreshTokenBytes()).toString("hex");
 }
 
+function getJwtSecret() {
+  const configuredSecret = process.env.JWT_SECRET;
+
+  if (configuredSecret) {
+    return configuredSecret;
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("JWT_SECRET is required in production.");
+  }
+
+  return "development-only-secret";
+}
+
 function signAccessToken(adminUser) {
   const payload = {
-    id: adminUser._id.toString(),
+    id: String(adminUser._id || adminUser.id),
     role: normalizeRole(adminUser.role),
     username: adminUser.username,
     name: adminUser.name,
     tokenType: "access"
   };
 
-  return jwt.sign(
-    payload,
-    process.env.JWT_SECRET || "development-only-secret",
-    { expiresIn: accessTokenExpiry() }
-  );
+  return jwt.sign(payload, getJwtSecret(), { expiresIn: accessTokenExpiry() });
 }
 
 function refreshTokenExpiryDate() {
@@ -56,9 +69,9 @@ async function createRefreshToken({ adminUserId, ipAddress }) {
   const tokenHash = hashToken(refreshToken);
   const expiresAt = refreshTokenExpiryDate();
 
-  const persisted = await RefreshToken.create({
+  const persisted = await createRefreshTokenRecord({
     tokenHash,
-    adminUser: adminUserId,
+    adminUserId,
     expiresAt,
     createdByIp: ipAddress || null
   });
@@ -72,18 +85,12 @@ async function createRefreshToken({ adminUserId, ipAddress }) {
 }
 
 async function revokeRefreshToken({ tokenHash, replacedByTokenHash = null }) {
-  return RefreshToken.findOneAndUpdate(
-    { tokenHash, revokedAt: null },
-    {
-      revokedAt: now(),
-      replacedByTokenHash
-    },
-    { new: true }
-  );
+  return revokeRefreshTokenByHash(tokenHash, replacedByTokenHash);
 }
 
 module.exports = {
   hashToken,
+  getJwtSecret,
   signAccessToken,
   createRefreshToken,
   revokeRefreshToken

@@ -1,3 +1,4 @@
+import axios from "axios";
 import {
   clearSession,
   getAccessToken,
@@ -5,30 +6,18 @@ import {
   getStoredAdminProfile,
   saveSession
 } from "./auth";
+import { ADMIN_LOGIN_PATH } from "../config/adminPaths";
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000/api";
+
+const api = axios.create({
+  baseURL: API_BASE_URL,
+  headers: {
+    Accept: "application/json"
+  }
+});
 
 let refreshInFlightPromise = null;
-
-async function parseJsonSafe(response) {
-  try {
-    return await response.json();
-  } catch (_error) {
-    return null;
-  }
-}
-
-function withQuery(path, query = {}) {
-  const params = new URLSearchParams();
-  Object.entries(query).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== "") {
-      params.append(key, value);
-    }
-  });
-  const suffix = params.toString();
-  return suffix ? `${path}?${suffix}` : path;
-}
 
 async function refreshSession() {
   const refreshToken = getRefreshToken();
@@ -38,205 +27,237 @@ async function refreshSession() {
   }
 
   if (!refreshInFlightPromise) {
-    refreshInFlightPromise = (async () => {
-      const response = await fetch(`${API_BASE_URL}/admin/refresh`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ refreshToken })
-      });
+    refreshInFlightPromise = api
+      .post("/admin/refresh", { refreshToken })
+      .then((response) => {
+        const { accessToken, refreshToken: nextRefreshToken, admin } = response.data || {};
+        if (!accessToken || !nextRefreshToken) {
+          clearSession();
+          return false;
+        }
 
-      const data = await parseJsonSafe(response);
-      if (!response.ok || !data?.accessToken || !data?.refreshToken) {
+        saveSession(accessToken, nextRefreshToken, admin || getStoredAdminProfile());
+        return true;
+      })
+      .catch(() => {
         clearSession();
         return false;
-      }
-
-      saveSession(
-        data.accessToken,
-        data.refreshToken,
-        data.admin || getStoredAdminProfile()
-      );
-      return true;
-    })().finally(() => {
-      refreshInFlightPromise = null;
-    });
+      })
+      .finally(() => {
+        refreshInFlightPromise = null;
+      });
   }
 
   return refreshInFlightPromise;
 }
 
-async function request(path, options = {}, config = {}) {
-  const { auth = true, retryOn401 = true } = config;
-  const headers = new Headers(options.headers || {});
+api.interceptors.request.use((config) => {
+  const token = getAccessToken();
+  if (token) {
+    config.headers = config.headers || {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
 
-  if (auth) {
-    const token = getAccessToken();
-    if (token) {
-      headers.set("Authorization", `Bearer ${token}`);
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+    const isAuthEndpoint = /\/admin\/(login|refresh|logout)/.test(originalRequest?.url || "");
+
+    if (error.response?.status === 401 && !isAuthEndpoint && !originalRequest?._retry) {
+      originalRequest._retry = true;
+      const refreshed = await refreshSession();
+      if (refreshed) {
+        const token = getAccessToken();
+        originalRequest.headers = originalRequest.headers || {};
+        originalRequest.headers.Authorization = `Bearer ${token}`;
+        return api(originalRequest);
+      }
+
+      if (typeof window !== "undefined") {
+        window.location.assign(ADMIN_LOGIN_PATH);
+      }
     }
+
+    return Promise.reject(error);
+  }
+);
+
+export const PERMISSIONS = {
+  CARS_VIEW: "cars:view",
+  CARS_CREATE: "cars:create",
+  CARS_UPDATE: "cars:update",
+  CARS_DELETE: "cars:delete",
+  CARS_MARK_SOLD: "cars:mark_sold",
+  SELL_REQUESTS_VIEW: "sell_requests:view",
+  SELL_REQUESTS_UPDATE: "sell_requests:update",
+  ADMIN_STATS: "admin:stats",
+  ADMIN_UPLOAD: "admin:upload",
+  ADMIN_BULK_IMPORT: "admin:bulk_import",
+  AUDIT_VIEW: "audit:view",
+  USERS_MANAGE: "users:manage",
+  SYSTEM_SETTINGS: "system:settings"
+};
+
+export const ROLES = {
+  MANAGER: "manager",
+  EDITOR: "editor",
+  VIEWER: "viewer",
+  ADMIN: "admin"
+};
+
+function buildErrorMessage(error) {
+  if (!error?.response && error?.message === "Network Error") {
+    return `Could not reach the API at ${API_BASE_URL}. Make sure the backend is running and CORS allows this page.`;
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...options,
-    headers
-  });
-  const data = await parseJsonSafe(response);
-
-  if (response.status === 401 && auth && retryOn401) {
-    const refreshed = await refreshSession();
-    if (refreshed) {
-      return request(path, options, { ...config, retryOn401: false });
-    }
-  }
-
-  if (!response.ok) {
-    const message = data?.message || "Request failed.";
-    throw new Error(message);
-  }
-
-  return data;
+  const message = error?.response?.data?.message || error?.message || "Request failed.";
+  return message;
 }
 
-export function getCars(query = {}) {
-  return request(withQuery("/cars", query), {}, { auth: false });
+export async function adminLogin(payload) {
+  const response = await api.post("/admin/login", payload);
+  return response.data;
 }
 
-export function getAdminCars(query = {}) {
-  return request(withQuery("/cars/admin/all", query));
-}
-
-export function getCarById(id) {
-  return request(`/cars/${id}`, {}, { auth: false });
-}
-
-export function adminLogin(payload) {
-  return request(
-    "/admin/login",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    },
-    { auth: false }
-  );
-}
-
-export function adminLogout(allDevices = false) {
+export async function adminLogout(allDevices = false) {
   const refreshToken = getRefreshToken();
   if (!refreshToken) {
     clearSession();
-    return Promise.resolve({ message: "Logged out." });
+    return { message: "Logged out." };
   }
 
-  return request(
-    "/admin/logout",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ refreshToken, allDevices })
-    },
-    { auth: false, retryOn401: false }
-  ).finally(() => {
+  try {
+    const response = await api.post("/admin/logout", { refreshToken, allDevices });
+    return response.data;
+  } finally {
     clearSession();
-  });
+  }
 }
 
-export function getAdminProfile() {
-  return request("/admin/me");
+export async function getAdminProfile() {
+  const response = await api.get("/admin/me");
+  return response.data;
 }
 
-export function getAdminStats() {
-  return request("/admin/stats");
+export async function getAdminStats(query = {}) {
+  const response = await api.get("/admin/stats", { params: query });
+  return response.data;
 }
 
-export function getAuditLogs(query = {}) {
-  return request(withQuery("/admin/audit-logs", query));
+export async function getAdminCars(query = {}) {
+  const response = await api.get("/cars/admin/all", { params: query });
+  return response.data;
 }
 
-export function getAdminUsers() {
-  return request("/admin/users");
+export async function getAdminCarById(id) {
+  const response = await api.get(`/cars/admin/${id}`);
+  return response.data;
 }
 
-export function createAdminUser(payload) {
-  return request("/admin/users", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
-  });
+export async function getSellers(query = {}) {
+  const response = await api.get("/cars/admin/sellers", { params: query });
+  return response.data;
 }
 
-export function updateAdminUser(id, payload) {
-  return request(`/admin/users/${id}`, {
-    method: "PATCH",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
-  });
+export async function getCars(query = {}) {
+  const response = await api.get("/cars", { params: query });
+  return response.data;
 }
 
-export function createCar(payload) {
-  return request("/cars", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
-  });
+export async function getCarById(id) {
+  const response = await api.get(`/cars/${id}`);
+  return response.data;
 }
 
-export function updateCar(id, payload) {
-  return request(`/cars/${id}`, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
-  });
+export async function createCar(payload) {
+  const response = await api.post("/cars", payload);
+  return response.data;
 }
 
-export function deleteCar(id) {
-  return request(`/cars/${id}`, {
-    method: "DELETE"
-  });
+export async function updateCar(id, payload) {
+  const response = await api.put(`/cars/${id}`, payload);
+  return response.data;
 }
 
-export function markCarSold(id) {
-  return request(`/cars/${id}/sold`, {
-    method: "PATCH"
-  });
+export async function deleteCar(id) {
+  const response = await api.delete(`/cars/${id}`);
+  return response.data;
 }
 
-export function markCarAvailable(id) {
-  return request(`/cars/${id}/unsold`, {
-    method: "PATCH"
-  });
+export async function markCarSold(id) {
+  const response = await api.patch(`/cars/${id}/sold`);
+  return response.data;
 }
 
-export function uploadCarImage(file) {
+export async function markCarAvailable(id) {
+  const response = await api.patch(`/cars/${id}/unsold`);
+  return response.data;
+}
+
+export async function uploadCarImage(file) {
   const formData = new FormData();
   formData.append("image", file);
-
-  return request("/admin/upload-image", {
-    method: "POST",
-    body: formData
+  const response = await api.post("/admin/upload-image", formData, {
+    headers: { "Content-Type": "multipart/form-data" }
   });
+  return response.data;
 }
 
-export function uploadCarsCsv(file) {
+export async function uploadCarsCsv(file) {
   const formData = new FormData();
   formData.append("file", file);
-
-  return request("/admin/bulk-import", {
-    method: "POST",
-    body: formData
+  const response = await api.post("/admin/bulk-import", formData, {
+    headers: { "Content-Type": "multipart/form-data" }
   });
+  return response.data;
 }
+
+export async function submitSellRequest(payload, images = []) {
+  const formData = new FormData();
+  Object.entries(payload).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      formData.append(key, value);
+    }
+  });
+  images.forEach((image) => formData.append("images", image));
+
+  const response = await api.post("/sell-requests", formData, {
+    headers: { "Content-Type": "multipart/form-data" }
+  });
+  return response.data;
+}
+
+export async function getSellRequests(query = {}) {
+  const response = await api.get("/sell-requests/admin/all", { params: query });
+  return response.data;
+}
+
+export async function updateSellRequest(id, payload) {
+  const response = await api.patch(`/sell-requests/admin/${id}`, payload);
+  return response.data;
+}
+
+export async function getAdminUsers() {
+  const response = await api.get("/admin/users");
+  return response.data;
+}
+
+export async function createAdminUser(payload) {
+  const response = await api.post("/admin/users", payload);
+  return response.data;
+}
+
+export async function updateAdminUser(id, payload) {
+  const response = await api.patch(`/admin/users/${id}`, payload);
+  return response.data;
+}
+
+export async function getAuditLogs(query = {}) {
+  const response = await api.get("/admin/audit-logs", { params: query });
+  return response.data;
+}
+
+export { buildErrorMessage };

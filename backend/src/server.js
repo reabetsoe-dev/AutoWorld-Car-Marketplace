@@ -1,12 +1,20 @@
 require("dotenv").config();
 
 const express = require("express");
-const mongoose = require("mongoose");
+const path = require("path");
 const cors = require("cors");
 const helmet = require("helmet");
+const { closeDatabase, connectDatabase, isDatabaseConnected } = require("./db");
+
+const {
+  apiLimiter,
+  authLimiter
+} = require("./middleware/rateLimiter");
+
 const authRoutes = require("./routes/auth");
 const adminRoutes = require("./routes/admin");
 const carRoutes = require("./routes/cars");
+const sellRequestRoutes = require("./routes/sellRequests");
 
 const app = express();
 app.disable("x-powered-by");
@@ -18,9 +26,30 @@ function parseCsvEnv(value) {
     .filter(Boolean);
 }
 
+function expandLocalhostOrigins(origins) {
+  const expandedOrigins = new Set(origins);
+
+  for (const origin of origins) {
+    try {
+      const url = new URL(origin);
+      if (url.hostname === "localhost") {
+        url.hostname = "127.0.0.1";
+        expandedOrigins.add(url.toString().replace(/\/$/, ""));
+      } else if (url.hostname === "127.0.0.1") {
+        url.hostname = "localhost";
+        expandedOrigins.add(url.toString().replace(/\/$/, ""));
+      }
+    } catch (_error) {
+      // Non-URL origins are ignored here and still checked as configured.
+    }
+  }
+
+  return [...expandedOrigins];
+}
+
 function buildCorsOptions() {
-  const configuredOrigins = parseCsvEnv(
-    process.env.CORS_ORIGIN || process.env.CLIENT_ORIGIN || "*"
+  const configuredOrigins = expandLocalhostOrigins(
+    parseCsvEnv(process.env.CORS_ORIGIN || process.env.CLIENT_ORIGIN || "*")
   );
 
   if (configuredOrigins.length === 0 || configuredOrigins.includes("*")) {
@@ -48,13 +77,16 @@ app.use(
 );
 
 app.use(cors(buildCorsOptions()));
-
 app.use(express.json({ limit: "1mb" }));
+app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
+
+app.use("/api", apiLimiter);
+app.use("/api/admin/login", authLimiter);
 
 app.get("/api/health", (_req, res) => {
   res.json({
     status: "ok",
-    database: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+    database: isDatabaseConnected() ? "connected" : "disconnected",
     timestamp: new Date().toISOString()
   });
 });
@@ -62,10 +94,19 @@ app.get("/api/health", (_req, res) => {
 app.use("/api/admin", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/cars", carRoutes);
+app.use("/api/sell-requests", sellRequestRoutes);
 
 app.use((err, _req, res, next) => {
   if (err?.code === "LIMIT_FILE_SIZE") {
-    return res.status(400).json({ message: "Image too large (max 5MB)." });
+    return res.status(400).json({ message: "Image too large (max 8MB)." });
+  }
+  if (err?.code === "LIMIT_UNEXPECTED_FILE") {
+    return res.status(400).json({
+      message: "Unexpected upload field. Please check the upload field name."
+    });
+  }
+  if (err?.statusCode) {
+    return res.status(err.statusCode).json({ message: err.message });
   }
   if (err) {
     return res.status(500).json({ message: "Unexpected server error." });
@@ -79,20 +120,20 @@ app.use((_req, res) => {
 
 async function startServer() {
   try {
-    const mongoUri = process.env.MONGODB_URI;
+    const isProduction = process.env.NODE_ENV === "production";
 
-    if (!mongoUri) {
-      throw new Error("MONGODB_URI environment variable is missing.");
+    if (isProduction && !process.env.JWT_SECRET) {
+      throw new Error("JWT_SECRET environment variable is missing.");
     }
 
-    await mongoose.connect(mongoUri, {
-      serverSelectionTimeoutMS: Number(process.env.MONGODB_TIMEOUT_MS) || 10000
-    });
-
-    // eslint-disable-next-line no-console
-    console.log(
-  `MongoDB connected (${process.env.NODE_ENV || "development"})`
-);
+    try {
+      await connectDatabase();
+      // eslint-disable-next-line no-console
+      console.log(`PostgreSQL connected (${process.env.NODE_ENV || "development"})`);
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error(`PostgreSQL unavailable at startup: ${error.message}`);
+    }
 
     const port = Number(process.env.PORT) || 5000;
     app.listen(port, () => {
@@ -111,9 +152,9 @@ startServer();
 process.on("SIGINT", async () => {
   console.log("Shutting down server...");
 
-  await mongoose.connection.close();
+  await closeDatabase();
 
-  console.log("MongoDB connection closed.");
+  console.log("PostgreSQL connection closed.");
 
   process.exit(0);
 });

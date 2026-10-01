@@ -9,6 +9,9 @@ node_modules/
 # Build output
 dist/
 build/
+uploads/
+backend/uploads/
+backend/.local-postgres/
 
 # Logs
 *.log

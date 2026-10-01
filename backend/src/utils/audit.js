@@ -1,5 +1,5 @@
-const AuditLog = require("../models/AuditLog");
 const { normalizeRole } = require("../constants/roles");
+const { createAuditLog } = require("../repositories/auditLogs");
 
 function resolveIpAddress(req) {
   const headerValue = req.headers["x-forwarded-for"];
@@ -32,7 +32,7 @@ async function recordAudit(req, payload) {
   };
 
   try {
-    await AuditLog.create(doc);
+    await createAuditLog(doc);
   } catch (_error) {
     // Intentionally swallow errors to avoid blocking user flows.
   }

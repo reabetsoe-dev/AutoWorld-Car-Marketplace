@@ -1,20 +1,40 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const multer = require("multer");
-const Car = require("../models/Car");
-const AdminUser = require("../models/AdminUser");
-const AuditLog = require("../models/AuditLog");
-const { requireAdminAuth, requirePermission } = require("../middleware/auth");
-const { normalizeRole, ROLES } = require("../constants/roles");
+const { requireAdminAuth } = require("../middleware/auth");
+const { requireDatabaseConnection } = require("../middleware/database");
+const { requirePermission } = require("../middleware/permissions");
+const { isKnownRole, normalizeRole, ROLES, PERMISSIONS } = require("../constants/roles");
 const {
-  cloudinary,
-  isCloudinaryConfigured,
-  bufferToDataUri
-} = require("../utils/cloudinary");
+  imageStorageMissingMessage,
+  isImageStorageConfigured,
+  uploadImageFile
+} = require("../utils/imageStorage");
 const { parseCsvText } = require("../utils/csv");
 const { recordAudit } = require("../utils/audit");
+const { buildCarTitle } = require("../utils/carTitles");
+const {
+  DEFAULT_CAR_CATEGORY,
+  isCarCategory,
+  normalizeCarCategory
+} = require("../constants/carCategories");
+const {
+  getCarStats,
+  insertManyCars
+} = require("../repositories/cars");
+const {
+  createAdminUser,
+  findAdminByEmail,
+  findAdminById,
+  findAdminByUsername,
+  listAdminUsers,
+  updateAdminUser
+} = require("../repositories/adminUsers");
+const { listAuditLogs } = require("../repositories/auditLogs");
 
 const router = express.Router();
+
+router.use(requireDatabaseConnection);
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -55,11 +75,13 @@ function readField(row, candidates) {
 }
 
 function normalizeCsvCar(row, createdBy) {
-  const title = String(readField(row, ["title"]) || "").trim();
   const brand = String(readField(row, ["brand"]) || "").trim();
   const model = String(readField(row, ["model"]) || "").trim();
   const description = String(readField(row, ["description"]) || "").trim();
   const location = String(readField(row, ["location"]) || "").trim();
+  const category =
+    normalizeCarCategory(readField(row, ["category", "vehiclecategory", "vehicle_category", "type"])) ||
+    DEFAULT_CAR_CATEGORY;
   const fuelType = String(
     readField(row, ["fueltype", "fuel_type", "fuel"]) || "other"
   )
@@ -72,7 +94,10 @@ function normalizeCsvCar(row, createdBy) {
     .toLowerCase();
   const year = numberOrUndefined(readField(row, ["year"]));
   const price = numberOrUndefined(readField(row, ["price"]));
-  const mileage = numberOrUndefined(readField(row, ["mileage", "miles", "kms"]));
+  let mileage = numberOrUndefined(readField(row, ["mileage", "miles", "kms"]));
+  if (category === "accessory" && mileage === undefined) {
+    mileage = 0;
+  }
   const imageUrls = splitImageUrls(
     readField(row, ["imageurls", "image_urls", "images", "image"])
   );
@@ -87,9 +112,12 @@ function normalizeCsvCar(row, createdBy) {
   );
 
   return {
-    title,
+    title:
+      String(readField(row, ["title"]) || "").trim() ||
+      buildCarTitle({ year, brand, model, category }),
     brand,
     model: model || undefined,
+    category,
     description: description || undefined,
     location: location || undefined,
     fuelType,
@@ -107,8 +135,10 @@ function normalizeCsvCar(row, createdBy) {
 }
 
 function validateCsvCar(car) {
-  if (!car.title) return "title is required";
   if (!car.brand) return "brand is required";
+  if (!isCarCategory(car.category)) {
+    return "category must be one of: car, bakkie, motorcycle, commercial, accessory";
+  }
   if (car.price === undefined) return "price is required";
   if (car.mileage === undefined) return "mileage is required";
   if (car.price < 0) return "price cannot be negative";
@@ -120,84 +150,43 @@ function sanitizeAdminUser(adminUser) {
   return {
     id: adminUser._id,
     username: adminUser.username,
+    email: adminUser.email,
     name: adminUser.name,
     role: normalizeRole(adminUser.role),
-    isActive: adminUser.isActive
+    isActive: Boolean(adminUser.isActive),
+    lastLogin: adminUser.lastLogin || null
   };
+}
+
+function resolveAdminRoleInput(inputRole, options = {}) {
+  if (!String(inputRole || "").trim()) {
+    throw new Error("Role is required.");
+  }
+
+  const normalizedRole = normalizeRole(inputRole);
+  const allowAdmin = options.allowAdmin === true;
+
+  if (normalizedRole === ROLES.ADMIN && !allowAdmin) {
+    throw new Error("Admin role is not allowed for this operation.");
+  }
+
+  if (!isKnownRole(normalizedRole)) {
+    const allowedRoles = allowAdmin
+      ? Object.values(ROLES)
+      : [ROLES.MANAGER, ROLES.EDITOR, ROLES.VIEWER];
+    throw new Error(`Role must be one of: ${allowedRoles.join(", ")}.`);
+  }
+
+  return normalizedRole;
 }
 
 router.get(
   "/stats",
   requireAdminAuth,
-  requirePermission("admin:stats"),
-  async (_req, res) => {
+  requirePermission(PERMISSIONS.ADMIN_STATS),
+  async (req, res) => {
     try {
-      const [summaryResult, brandBreakdown] = await Promise.all([
-        Car.aggregate([
-          {
-            $group: {
-              _id: null,
-              totalCars: { $sum: 1 },
-              soldCars: {
-                $sum: {
-                  $cond: [{ $eq: ["$isSold", true] }, 1, 0]
-                }
-              },
-              availableCars: {
-                $sum: {
-                  $cond: [{ $eq: ["$isSold", false] }, 1, 0]
-                }
-              },
-              totalInventoryValue: {
-                $sum: {
-                  $cond: [{ $eq: ["$isSold", false] }, "$price", 0]
-                }
-              },
-              averagePrice: { $avg: "$price" },
-              averageMileage: { $avg: "$mileage" }
-            }
-          }
-        ]),
-        Car.aggregate([
-          {
-            $group: {
-              _id: "$brand",
-              total: { $sum: 1 },
-              available: {
-                $sum: {
-                  $cond: [{ $eq: ["$isSold", false] }, 1, 0]
-                }
-              },
-              sold: {
-                $sum: {
-                  $cond: [{ $eq: ["$isSold", true] }, 1, 0]
-                }
-              }
-            }
-          },
-          { $sort: { total: -1, _id: 1 } },
-          { $limit: 8 }
-        ])
-      ]);
-
-      const summary = summaryResult[0] || {
-        totalCars: 0,
-        soldCars: 0,
-        availableCars: 0,
-        totalInventoryValue: 0,
-        averagePrice: 0,
-        averageMileage: 0
-      };
-
-      return res.json({
-        summary,
-        brandBreakdown: brandBreakdown.map((item) => ({
-          brand: item._id || "Unknown",
-          total: item.total || 0,
-          available: item.available || 0,
-          sold: item.sold || 0
-        }))
-      });
+      return res.json(await getCarStats({ query: req.query }));
     } catch (error) {
       return res.status(500).json({ message: "Could not load admin stats." });
     }
@@ -207,14 +196,13 @@ router.get(
 router.post(
   "/upload-image",
   requireAdminAuth,
-  requirePermission("admin:upload"),
+  requirePermission(PERMISSIONS.ADMIN_UPLOAD),
   upload.single("image"),
   async (req, res) => {
     try {
-      if (!isCloudinaryConfigured) {
+      if (!isImageStorageConfigured()) {
         return res.status(400).json({
-          message:
-            "Cloudinary is not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET."
+          message: imageStorageMissingMessage()
         });
       }
 
@@ -226,19 +214,16 @@ router.post(
         return res.status(400).json({ message: "Only image uploads are allowed." });
       }
 
-      const uploadFolder = process.env.CLOUDINARY_FOLDER || "autoworld/cars";
-      const dataUri = bufferToDataUri(req.file);
-
-      const result = await cloudinary.uploader.upload(dataUri, {
-        folder: uploadFolder,
-        resource_type: "image"
+      const result = await uploadImageFile(req.file, {
+        folder: process.env.BLOB_CAR_IMAGE_FOLDER || process.env.CLOUDINARY_FOLDER || "autoworld/cars"
       });
 
       await recordAudit(req, {
         action: "admin.upload_image",
-        entityType: "cloudinary_asset",
-        entityId: result.public_id,
+        entityType: "image_asset",
+        entityId: result.publicId,
         metadata: {
+          provider: result.provider,
           width: result.width,
           height: result.height,
           format: result.format
@@ -246,8 +231,10 @@ router.post(
       });
 
       return res.status(201).json({
-        url: result.secure_url,
-        publicId: result.public_id,
+        url: result.url,
+        publicId: result.publicId,
+        filename: result.filename,
+        provider: result.provider,
         width: result.width,
         height: result.height,
         format: result.format
@@ -261,7 +248,7 @@ router.post(
 router.post(
   "/bulk-import",
   requireAdminAuth,
-  requirePermission("admin:bulk_import"),
+  requirePermission(PERMISSIONS.ADMIN_BULK_IMPORT),
   upload.single("file"),
   async (req, res) => {
     try {
@@ -312,13 +299,7 @@ router.post(
         });
       }
 
-      let createdCount = 0;
-      try {
-        const created = await Car.insertMany(validCars, { ordered: false });
-        createdCount = created.length;
-      } catch (error) {
-        createdCount = error.insertedDocs?.length || 0;
-      }
+      const createdCount = await insertManyCars(validCars);
 
       await recordAudit(req, {
         action: "car.bulk_import",
@@ -345,35 +326,17 @@ router.post(
 router.get(
   "/audit-logs",
   requireAdminAuth,
-  requirePermission("audit:view"),
+  requirePermission(PERMISSIONS.AUDIT_VIEW),
   async (req, res) => {
     try {
-      const page = Math.max(1, Number(req.query.page) || 1);
-      const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 15));
-      const skip = (page - 1) * limit;
-
-      const filters = {};
-      if (req.query.action) {
-        filters.action = new RegExp(String(req.query.action).trim(), "i");
-      }
-      if (req.query.actorUsername) {
-        filters.actorUsername = String(req.query.actorUsername).trim().toLowerCase();
-      }
-
-      const [logs, total] = await Promise.all([
-        AuditLog.find(filters).sort({ createdAt: -1 }).skip(skip).limit(limit),
-        AuditLog.countDocuments(filters)
-      ]);
-
-      return res.json({
-        data: logs,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages: Math.max(1, Math.ceil(total / limit))
-        }
-      });
+      return res.json(await listAuditLogs({
+        page: req.query.page,
+        limit: req.query.limit,
+        action: req.query.action,
+        actorUsername: req.query.actorUsername,
+        createdFrom: req.query.createdFrom,
+        createdTo: req.query.createdTo
+      }));
     } catch (error) {
       return res.status(500).json({ message: "Could not load audit logs." });
     }
@@ -383,13 +346,10 @@ router.get(
 router.get(
   "/users",
   requireAdminAuth,
-  requirePermission("users:manage"),
+  requirePermission(PERMISSIONS.USERS_MANAGE),
   async (_req, res) => {
     try {
-      const users = await AdminUser.find({})
-        .select("_id username name role isActive createdAt updatedAt")
-        .sort({ createdAt: -1 });
-
+      const users = await listAdminUsers();
       return res.json({ data: users.map(sanitizeAdminUser) });
     } catch (error) {
       return res.status(500).json({ message: "Could not load admin users." });
@@ -400,32 +360,54 @@ router.get(
 router.post(
   "/users",
   requireAdminAuth,
-  requirePermission("users:manage"),
+  requirePermission(PERMISSIONS.USERS_MANAGE),
   async (req, res) => {
     try {
       const username = String(req.body.username || "").trim().toLowerCase();
+      const email = String(req.body.email || "").trim().toLowerCase();
       const name = String(req.body.name || "").trim();
       const password = String(req.body.password || "");
-      const role = normalizeRole(req.body.role || ROLES.EDITOR);
+      let role;
+      try {
+        role = resolveAdminRoleInput(req.body.role || ROLES.EDITOR, {
+          allowAdmin: false
+        });
+      } catch (error) {
+        return res.status(400).json({ message: error.message });
+      }
 
-      if (!username || !name || !password) {
+      if (!username || !email || !name || !password) {
         return res
           .status(400)
-          .json({ message: "username, name, and password are required." });
+          .json({ message: "username, email, name, and password are required." });
+      }
+
+      const emailRegex = /^\S+@\S+\.\S+$/;
+      if (!emailRegex.test(email)) {
+        return res.status(400).json({ message: "Please provide a valid email address." });
       }
 
       if (password.length < 8) {
         return res.status(400).json({ message: "Password must be at least 8 characters." });
       }
 
-      const exists = await AdminUser.findOne({ username });
-      if (exists) {
+      const [existingUsername, existingEmail] = await Promise.all([
+        findAdminByUsername(username),
+        findAdminByEmail(email)
+      ]);
+
+      if (existingUsername) {
         return res.status(409).json({ message: "Username already exists." });
       }
 
+      if (existingEmail) {
+        return res.status(409).json({ message: "Email already exists." });
+      }
+
       const passwordHash = await bcrypt.hash(password, 10);
-      const created = await AdminUser.create({
+      const created = await createAdminUser({
         username,
+        email,
         name,
         passwordHash,
         role,
@@ -438,6 +420,7 @@ router.post(
         entityId: created._id,
         metadata: {
           username: created.username,
+          email: created.email,
           role: created.role
         }
       });
@@ -452,7 +435,7 @@ router.post(
 router.patch(
   "/users/:id",
   requireAdminAuth,
-  requirePermission("users:manage"),
+  requirePermission(PERMISSIONS.USERS_MANAGE),
   async (req, res) => {
     try {
       const update = {};
@@ -460,7 +443,13 @@ router.patch(
         update.name = String(req.body.name || "").trim();
       }
       if (Object.prototype.hasOwnProperty.call(req.body, "role")) {
-        update.role = normalizeRole(req.body.role);
+        try {
+          update.role = resolveAdminRoleInput(req.body.role, {
+            allowAdmin: false
+          });
+        } catch (error) {
+          return res.status(400).json({ message: error.message });
+        }
       }
       if (Object.prototype.hasOwnProperty.call(req.body, "isActive")) {
         update.isActive = Boolean(req.body.isActive);
@@ -473,12 +462,15 @@ router.patch(
             .json({ message: "Password must be at least 8 characters." });
         }
         update.passwordHash = await bcrypt.hash(password, 10);
+        update.passwordChangedAt = new Date();
       }
 
-      const user = await AdminUser.findByIdAndUpdate(req.params.id, update, {
-        new: true,
-        runValidators: true
-      });
+      const existingUser = await findAdminById(req.params.id);
+      if (!existingUser) {
+        return res.status(404).json({ message: "Admin user not found." });
+      }
+
+      const user = await updateAdminUser(req.params.id, update);
       if (!user) {
         return res.status(404).json({ message: "Admin user not found." });
       }
@@ -500,3 +492,5 @@ router.patch(
 );
 
 module.exports = router;
+module.exports.sanitizeAdminUser = sanitizeAdminUser;
+module.exports.resolveAdminRoleInput = resolveAdminRoleInput;

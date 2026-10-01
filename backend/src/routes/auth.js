@@ -1,8 +1,7 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
-const AdminUser = require("../models/AdminUser");
-const RefreshToken = require("../models/RefreshToken");
 const { requireAdminAuth } = require("../middleware/auth");
+const { requireDatabaseConnection } = require("../middleware/database");
 const { normalizeRole } = require("../constants/roles");
 const {
   hashToken,
@@ -11,15 +10,32 @@ const {
   revokeRefreshToken
 } = require("../utils/tokens");
 const { recordAudit } = require("../utils/audit");
+const {
+  findAdminById,
+  findAdminByUsername,
+  updateAdminUser
+} = require("../repositories/adminUsers");
+const {
+  findRefreshTokenByHash,
+  markRefreshTokenLastUsed,
+  revokeRefreshTokenById,
+  revokeRefreshTokensForAdmin
+} = require("../repositories/refreshTokens");
 
 const router = express.Router();
+
+const MAX_LOGIN_ATTEMPTS = Number(process.env.MAX_LOGIN_ATTEMPTS) || 5;
+const ACCOUNT_LOCK_MINUTES = Number(process.env.ACCOUNT_LOCK_MINUTES) || 15;
 
 function sanitizeAdmin(admin) {
   return {
     id: admin._id,
     username: admin.username,
+    email: admin.email,
     name: admin.name,
-    role: normalizeRole(admin.role)
+    role: normalizeRole(admin.role),
+    isActive: Boolean(admin.isActive),
+    lastLogin: admin.lastLogin || null
   };
 }
 
@@ -36,7 +52,7 @@ function resolveIpAddress(req) {
   return req.ip || req.socket?.remoteAddress || null;
 }
 
-router.post("/login", async (req, res) => {
+router.post("/login", requireDatabaseConnection, async (req, res) => {
   try {
     const username = String(req.body.username || "").trim().toLowerCase();
     const password = String(req.body.password || "");
@@ -47,32 +63,59 @@ router.post("/login", async (req, res) => {
         .json({ message: "Username and password are required." });
     }
 
-    const admin = await AdminUser.findOne({ username });
+    const admin = await findAdminByUsername(username);
     if (!admin || !admin.isActive) {
       return res.status(401).json({ message: "Invalid credentials." });
     }
 
-    const passwordMatches = await bcrypt.compare(password, admin.passwordHash);
-    if (!passwordMatches) {
-      return res.status(401).json({ message: "Invalid credentials." });
+    if (admin.lockUntil && admin.lockUntil > new Date()) {
+      return res.status(423).json({
+        message: "Your account is temporarily locked.",
+        lockedUntil: admin.lockUntil
+      });
     }
 
-    const accessToken = signAccessToken(admin);
+    const passwordMatches = await bcrypt.compare(password, admin.passwordHash);
+
+    if (!passwordMatches) {
+      admin.failedLoginAttempts = (admin.failedLoginAttempts || 0) + 1;
+
+      if (admin.failedLoginAttempts >= MAX_LOGIN_ATTEMPTS) {
+        admin.lockUntil = new Date(Date.now() + ACCOUNT_LOCK_MINUTES * 60 * 1000);
+      }
+
+      await updateAdminUser(admin._id, {
+        failedLoginAttempts: admin.failedLoginAttempts,
+        lockUntil: admin.lockUntil
+      });
+
+      return res.status(401).json({
+        message: "Invalid credentials."
+      });
+    }
+
+    const updatedAdmin = await updateAdminUser(admin._id, {
+      lastLogin: new Date(),
+      failedLoginAttempts: 0,
+      lockUntil: null
+    });
+
+    const accessToken = signAccessToken(updatedAdmin);
     const refresh = await createRefreshToken({
-      adminUserId: admin._id,
+      adminUserId: updatedAdmin._id,
       ipAddress: resolveIpAddress(req)
     });
 
     req.admin = {
-      id: admin._id.toString(),
-      username: admin.username,
-      name: admin.name,
-      role: normalizeRole(admin.role)
+      id: String(updatedAdmin._id),
+      username: updatedAdmin.username,
+      name: updatedAdmin.name,
+      role: normalizeRole(updatedAdmin.role)
     };
     await recordAudit(req, {
       action: "auth.login",
       entityType: "admin_user",
-      entityId: admin._id,
+      entityId: updatedAdmin._id,
       metadata: {}
     });
 
@@ -81,14 +124,14 @@ router.post("/login", async (req, res) => {
       refreshToken: refresh.refreshToken,
       tokenType: "Bearer",
       accessTokenExpiresIn: accessTokenInfo(),
-      admin: sanitizeAdmin(admin)
+      admin: sanitizeAdmin(updatedAdmin)
     });
   } catch (error) {
     return res.status(500).json({ message: "Login failed." });
   }
 });
 
-router.post("/refresh", async (req, res) => {
+router.post("/refresh", requireDatabaseConnection, async (req, res) => {
   try {
     const refreshToken = String(req.body.refreshToken || "").trim();
     if (!refreshToken) {
@@ -96,7 +139,7 @@ router.post("/refresh", async (req, res) => {
     }
 
     const tokenHash = hashToken(refreshToken);
-    const tokenDoc = await RefreshToken.findOne({ tokenHash }).populate("adminUser");
+    const tokenDoc = await findRefreshTokenByHash(tokenHash);
 
     if (!tokenDoc) {
       return res.status(401).json({ message: "Invalid refresh token." });
@@ -125,14 +168,11 @@ router.post("/refresh", async (req, res) => {
       replacedByTokenHash: rotated.tokenHash
     });
 
-    await RefreshToken.updateOne(
-      { _id: tokenDoc._id },
-      { $set: { lastUsedAt: new Date() } }
-    );
+    await markRefreshTokenLastUsed(tokenDoc._id);
 
     const accessToken = signAccessToken(admin);
     req.admin = {
-      id: admin._id.toString(),
+      id: String(admin._id),
       username: admin.username,
       name: admin.name,
       role: normalizeRole(admin.role)
@@ -156,7 +196,7 @@ router.post("/refresh", async (req, res) => {
   }
 });
 
-router.post("/logout", async (req, res) => {
+router.post("/logout", requireDatabaseConnection, async (req, res) => {
   try {
     const refreshToken = String(req.body.refreshToken || "").trim();
     const allDevices = req.body.allDevices === true;
@@ -166,27 +206,20 @@ router.post("/logout", async (req, res) => {
     }
 
     const tokenHash = hashToken(refreshToken);
-    const tokenDoc = await RefreshToken.findOne({ tokenHash }).populate("adminUser");
+    const tokenDoc = await findRefreshTokenByHash(tokenHash);
     if (!tokenDoc) {
       return res.json({ message: "Already logged out." });
     }
 
-    const revocationTime = new Date();
     if (allDevices) {
-      await RefreshToken.updateMany(
-        { adminUser: tokenDoc.adminUser?._id, revokedAt: null },
-        { $set: { revokedAt: revocationTime } }
-      );
+      await revokeRefreshTokensForAdmin(tokenDoc.adminUser?._id);
     } else {
-      await RefreshToken.updateOne(
-        { _id: tokenDoc._id, revokedAt: null },
-        { $set: { revokedAt: revocationTime } }
-      );
+      await revokeRefreshTokenById(tokenDoc._id);
     }
 
     if (tokenDoc.adminUser) {
       req.admin = {
-        id: tokenDoc.adminUser._id.toString(),
+        id: String(tokenDoc.adminUser._id),
         username: tokenDoc.adminUser.username,
         name: tokenDoc.adminUser.name,
         role: normalizeRole(tokenDoc.adminUser.role)
@@ -205,11 +238,9 @@ router.post("/logout", async (req, res) => {
   }
 });
 
-router.get("/me", requireAdminAuth, async (req, res) => {
+router.get("/me", requireDatabaseConnection, requireAdminAuth, async (req, res) => {
   try {
-    const admin = await AdminUser.findById(req.admin.id).select(
-      "_id username name role isActive"
-    );
+    const admin = await findAdminById(req.admin.id);
 
     if (!admin || !admin.isActive) {
       return res.status(404).json({ message: "Admin user not found." });
@@ -222,3 +253,4 @@ router.get("/me", requireAdminAuth, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.sanitizeAdmin = sanitizeAdmin;

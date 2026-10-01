@@ -1,59 +1,54 @@
-import { useState } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
-import { LockKeyhole, LogIn, ShieldCheck, UserRound } from "lucide-react";
-import { adminLogin } from "../services/api";
-import { isAuthenticated, saveSession } from "../services/auth";
-import { ADMIN_DASHBOARD_PATH } from "../config/adminPaths";
-import { showroomImages } from "../data/visualAssets";
+import { useState } from 'react';
+import { Navigate, useNavigate } from 'react-router-dom';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import { LockKeyhole, LogIn, UserRound } from 'lucide-react';
+import { adminLogin, buildErrorMessage } from '../services/api';
+import { isAuthenticated } from '../services/auth';
+import { useAuth } from '../contexts/AuthContext';
+import { ADMIN_DASHBOARD_PATH } from '../config/adminPaths';
+import { showroomImages } from '../data/visualAssets';
+
+const schema = z.object({
+  username: z.string().trim().min(1, 'Username is required.'),
+  password: z.string().min(1, 'Password is required.')
+});
 
 function AdminLoginPage() {
   const navigate = useNavigate();
-  const [credentials, setCredentials] = useState({ username: "", password: "" });
-  const [error, setError] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const { login } = useAuth();
+  const [error, setError] = useState('');
+
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting }
+  } = useForm({
+    resolver: zodResolver(schema),
+    defaultValues: { username: '', password: '' }
+  });
 
   if (isAuthenticated()) {
     return <Navigate to={ADMIN_DASHBOARD_PATH} replace />;
   }
 
-  async function handleSubmit(event) {
-    event.preventDefault();
-    setError("");
-    setIsSubmitting(true);
-
+  async function onSubmit(values) {
+    setError('');
     try {
-      const response = await adminLogin(credentials);
-      saveSession(response.accessToken, response.refreshToken, response.admin);
+      const response = await adminLogin(values);
+      login(response);
       navigate(ADMIN_DASHBOARD_PATH);
     } catch (err) {
-      setError(err.message || "Login failed.");
-    } finally {
-      setIsSubmitting(false);
+      setError(buildErrorMessage(err));
     }
   }
 
   return (
-    <section className="admin-login-page">
-      <div
-        className="admin-login-visual"
-        style={{
-          backgroundImage: `linear-gradient(180deg, rgba(9, 15, 25, 0.1), rgba(9, 15, 25, 0.72)), url(${showroomImages.operations})`
-        }}
-      >
-        <div>
-          <span className="eyebrow">
-            <ShieldCheck size={16} />
-            Secure operations
-          </span>
-          <h1>AutoWorld Admin</h1>
-          <p>Inventory control, sales status and marketplace workflow in one place.</p>
-        </div>
-      </div>
-
-      <form className="panel admin-login-card" onSubmit={handleSubmit}>
+    <section className="admin-login-page" style={{ '--admin-login-bg': `url(${showroomImages.adminLogin})` }}>
+      <form className="panel admin-login-card" onSubmit={handleSubmit(onSubmit)}>
         <div className="section-head">
           <span className="section-kicker">Private dashboard</span>
-          <h2>Sign in</h2>
         </div>
 
         <div className="field-group">
@@ -61,14 +56,8 @@ function AdminLoginPage() {
             <UserRound size={15} />
             Username
           </label>
-          <input
-            id="username"
-            autoComplete="username"
-            value={credentials.username}
-            onChange={(event) =>
-              setCredentials((prev) => ({ ...prev, username: event.target.value }))
-            }
-          />
+          <input id="username" autoComplete="username" {...register('username')} />
+          {errors.username ? <p className="text-sm text-red-400">{errors.username.message}</p> : null}
         </div>
 
         <div className="field-group">
@@ -76,21 +65,14 @@ function AdminLoginPage() {
             <LockKeyhole size={15} />
             Password
           </label>
-          <input
-            id="password"
-            type="password"
-            autoComplete="current-password"
-            value={credentials.password}
-            onChange={(event) =>
-              setCredentials((prev) => ({ ...prev, password: event.target.value }))
-            }
-          />
+          <input id="password" type="password" autoComplete="current-password" {...register('password')} />
+          {errors.password ? <p className="text-sm text-red-400">{errors.password.message}</p> : null}
         </div>
 
         <div className="button-row">
           <button className="btn btn--primary" type="submit" disabled={isSubmitting}>
             <LogIn size={17} />
-            {isSubmitting ? "Signing in..." : "Login"}
+            {isSubmitting ? 'Signing in...' : 'Login'}
           </button>
         </div>
 

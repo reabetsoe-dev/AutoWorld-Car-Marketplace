@@ -10,7 +10,7 @@ Production-style full-stack vehicle marketplace scaffold with:
 ## Stack
 - Frontend: React + Vite
 - Backend: Node.js + Express
-- Database: MongoDB (Mongoose)
+- Database: PostgreSQL
 - Auth: JWT access tokens + rotating refresh tokens
 - Uploads: Cloudinary (optional, recommended)
 
@@ -28,7 +28,7 @@ AutoWorld/
 |   `-- src/
 |       |-- constants/
 |       |-- middleware/
-|       |-- models/
+|       |-- repositories/
 |       |-- routes/
 |       `-- utils/
 `-- frontend/
@@ -58,7 +58,8 @@ Frontend `.env` key:
 - `VITE_ADMIN_BASE_PATH` (private admin route prefix, example: `/control-room-2026-portal`)
 
 Backend `.env` keys to set:
-- `MONGODB_URI`
+- `DATABASE_URL` (local dev example: `postgresql://postgres:postgres@localhost:5432/autoworld`)
+- `PGSSL=false` for local PostgreSQL
 - `JWT_SECRET`
 - `ACCESS_TOKEN_EXPIRES_IN` (example: `15m`)
 - `REFRESH_TOKEN_TTL_DAYS` (example: `30`)
@@ -67,32 +68,30 @@ Backend `.env` keys to set:
 - `ADMIN_ROLE` (`manager`, `editor`, `viewer`)
 - Cloudinary keys (`CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`) if image uploads are enabled
 
-## Free Hosting Setup
+## Local PostgreSQL Setup
 
-Recommended free-friendly backend stack:
-- Backend API: Render Free web service
-- Database: MongoDB Atlas Free cluster (M0)
-- Image uploads: Cloudinary free plan, optional
+For local development, use the PostgreSQL server installed on your computer.
 
-This repo includes `render.yaml` so Render can create the backend service from the repository root. Use these settings when Render prompts for secret environment variables:
-
-- `MONGODB_URI`: your Atlas connection string, including the database name, for example `/autoworld`
-- `CORS_ORIGIN`: your frontend URL, plus local dev if needed, comma-separated
-- `ADMIN_USERNAME`: first admin username
-- `ADMIN_PASSWORD`: first admin password
-- Cloudinary keys: optional unless you need admin image upload
-
-After the backend deploys, run the admin seed once from Render Shell or a one-off job:
+Create the `autoworld` database once, then run migrations and seed the admin user:
 ```bash
+npm run db:create
+npm run db:migrate
 npm run seed:admin
 ```
 
-Then set the frontend `VITE_API_BASE_URL` to your Render API URL:
-```bash
-VITE_API_BASE_URL=https://your-render-service.onrender.com/api
-```
+Hosted deployment can be configured later by replacing `DATABASE_URL` with a hosted PostgreSQL connection string and setting `PGSSL` as required by that provider.
 
-MongoDB Atlas access list note: free web hosts often do not provide a stable outbound IP. For a no-cost deployment, Atlas may need an access-list entry that allows your hosted backend to connect. Keep the Atlas database username/password strong and store them only as environment variables.
+## Vercel URLs
+
+Recommended Vercel project names:
+- Frontend: `autoworld-marketplace` -> `https://autoworld-marketplace.vercel.app`
+- Backend API: `autoworld-api` -> `https://autoworld-api.vercel.app/api`
+
+Admin uses the same frontend Vercel domain:
+- Login: `https://autoworld-marketplace.vercel.app/control-room-2026-portal/login`
+- Dashboard: `https://autoworld-marketplace.vercel.app/control-room-2026-portal/dashboard`
+
+For production, set frontend `VITE_API_BASE_URL=https://autoworld-api.vercel.app/api` and include `https://autoworld-marketplace.vercel.app` in backend `CORS_ORIGIN`.
 
 2) Install dependencies
 
@@ -108,9 +107,10 @@ cd frontend
 npm install
 ```
 
-3) Seed initial admin
+3) Create database tables and seed initial admin
 ```bash
 cd backend
+npm run db:migrate
 npm run seed:admin
 ```
 

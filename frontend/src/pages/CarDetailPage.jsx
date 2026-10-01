@@ -14,7 +14,9 @@ import {
   Wrench
 } from "lucide-react";
 import { getCarById } from "../services/api";
-import { findFallbackCar, getGalleryImages } from "../data/visualAssets";
+import { getCarCategoryLabel } from "../constants/carCategories";
+import { getAccessoryAvailabilityLabel } from "../constants/accessoryAvailability";
+import { getGalleryImages } from "../data/visualAssets";
 import { buildWhatsappEnquiryUrl } from "../utils/whatsapp";
 
 function formatPrice(value) {
@@ -40,12 +42,7 @@ function CarDetailPage() {
         const response = await getCarById(id);
         setCar(response);
       } catch (err) {
-        const fallbackCar = findFallbackCar(id);
-        if (fallbackCar) {
-          setCar(fallbackCar);
-        } else {
-          setError(err.message || "Could not load car details.");
-        }
+        setError(err.message || "Could not load car details.");
       } finally {
         setIsLoading(false);
       }
@@ -82,6 +79,9 @@ function CarDetailPage() {
   }
 
   if (!car) return <p>Car not found.</p>;
+
+  const isAccessory = car.category === "accessory";
+  const availabilityLabel = getAccessoryAvailabilityLabel(car.availabilityStatus);
 
   return (
     <section className="detail-page">
@@ -139,54 +139,93 @@ function CarDetailPage() {
            
             <span>
               <CheckCircle2 size={15} />
-              Ready
+              {isAccessory ? availabilityLabel : "Ready"}
+            </span>
+            <span>
+              <Wrench size={15} />
+              {getCarCategoryLabel(car.category)}
             </span>
            
           </div>
 
           <div className="detail-quick-spec-grid">
-            <div>
-              <strong>
-                <Gauge size={15} />
-                Mileage
-              </strong>
-              <span>{Number(car.mileage || 0).toLocaleString()} km</span>
-            </div>
-            <div>
-              <strong>
-                <CarFront size={15} />
-                Drive Type
-              </strong>
-              <span>4x2</span>
-            </div>
-            <div>
-              <strong>
-                <Wrench size={15} />
-                Transmission
-              </strong>
-              <span>{car.transmission || "Manual"}</span>
-            </div>
-            <div>
-              <strong>
-                <Fuel size={15} />
-                Fuel
-              </strong>
-              <span>{car.fuelType || "Petrol"}</span>
-            </div>
-            <div>
-              <strong>
-                <Gauge size={15} />
-                Consumption
-              </strong>
-              <span>5.2 l/100km</span>
-            </div>
-            <div>
-              <strong>
-                <Wrench size={15} />
-                Engine Cap
-              </strong>
-              <span>1198 cc</span>
-            </div>
+            {isAccessory ? (
+              <>
+                <div>
+                  <strong>
+                    <Wrench size={15} />
+                    Category
+                  </strong>
+                  <span>{getCarCategoryLabel(car.category)}</span>
+                </div>
+                <div>
+                  <strong>
+                    <CarFront size={15} />
+                    Brand
+                  </strong>
+                  <span>{car.brand || "N/A"}</span>
+                </div>
+                <div>
+                  <strong>
+                    <CheckCircle2 size={15} />
+                    Availability
+                  </strong>
+                  <span>{availabilityLabel}</span>
+                </div>
+                <div>
+                  <strong>
+                    <MapPin size={15} />
+                    Location
+                  </strong>
+                  <span>{car.location || "Maseru"}</span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <strong>
+                    <Gauge size={15} />
+                    Mileage
+                  </strong>
+                  <span>{Number(car.mileage || 0).toLocaleString()} km</span>
+                </div>
+                <div>
+                  <strong>
+                    <CarFront size={15} />
+                    Drive Type
+                  </strong>
+                  <span>4x2</span>
+                </div>
+                <div>
+                  <strong>
+                    <Wrench size={15} />
+                    Transmission
+                  </strong>
+                  <span>{car.transmission || "Manual"}</span>
+                </div>
+                <div>
+                  <strong>
+                    <Fuel size={15} />
+                    Fuel
+                  </strong>
+                  <span>{car.fuelType || "Petrol"}</span>
+                </div>
+                <div>
+                  <strong>
+                    <Gauge size={15} />
+                    Consumption
+                  </strong>
+                  <span>5.2 l/100km</span>
+                </div>
+                <div>
+                  <strong>
+                    <Wrench size={15} />
+                    Engine Cap
+                  </strong>
+                  <span>1198 cc</span>
+                </div>
+              </>
+            )}
           </div>
 
           <div className="button-row">
@@ -206,28 +245,41 @@ function CarDetailPage() {
       <div className="detail-lower-grid">
         <div className="detail-main-content">
           <section className="panel detail-spec-card">
-            <h2>VEHICLE DETAILS</h2>
+            <h2>{isAccessory ? "ACCESSORY DETAILS" : "VEHICLE DETAILS"}</h2>
             <ul>
               <li>
+                <span>Category:</span>
+                <strong>{getCarCategoryLabel(car.category)}</strong>
+              </li>
+              <li>
                 <span>Make:</span>
-                <strong>{car.brand || "Datsun"}</strong>
+                <strong>{car.brand || "N/A"}</strong>
               </li>
               <li>
-                <span>Model:</span>
-                <strong>{car.model || "GO"}</strong>
+                <span>{isAccessory ? "Accessory:" : "Model:"}</span>
+                <strong>{car.model || "N/A"}</strong>
               </li>
-              <li>
-                <span>Mileage:</span>
-                <strong>{Number(car.mileage || 0).toLocaleString()} KM</strong>
-              </li>
-              <li>
-                <span>Transmission:</span>
-                <strong>{car.transmission || "Manual"}</strong>
-              </li>
-              <li>
-                <span>Fuel Type:</span>
-                <strong>{car.fuelType || "Petrol"}</strong>
-              </li>
+              {isAccessory ? (
+                <li>
+                  <span>Availability:</span>
+                  <strong>{availabilityLabel}</strong>
+                </li>
+              ) : (
+                <>
+                  <li>
+                    <span>Mileage:</span>
+                    <strong>{Number(car.mileage || 0).toLocaleString()} KM</strong>
+                  </li>
+                  <li>
+                    <span>Transmission:</span>
+                    <strong>{car.transmission || "Manual"}</strong>
+                  </li>
+                  <li>
+                    <span>Fuel Type:</span>
+                    <strong>{car.fuelType || "Petrol"}</strong>
+                  </li>
+                </>
+              )}
             </ul>
           </section>
         </div>

@@ -4,14 +4,16 @@ services:
     runtime: node
     plan: free
     rootDir: backend
-    buildCommand: npm install
+    buildCommand: npm install && npm run db:migrate
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
         value: 20
-      - key: MONGODB_URI
+      - key: DATABASE_URL
         sync: false
+      - key: PGSSL
+        value: true
       - key: JWT_SECRET
         generateValue: true
       - key: ACCESS_TOKEN_EXPIRES_IN

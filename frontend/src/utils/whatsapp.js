@@ -1,4 +1,4 @@
-const WHATSAPP_NUMBER = "26663842459";
+const WHATSAPP_NUMBER = import.meta.env.VITE_ADMIN_WHATSAPP_NUMBER || "26663842459";
 
 export function buildWhatsappEnquiryUrl(car, formatPrice) {
   const title = car?.title || "this vehicle";

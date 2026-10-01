@@ -19,12 +19,13 @@ function HomePage() {
         <div className="landing-hero__content">
           <span className="eyebrow">
             <Sparkles size={16} />
-            Premium inspected marketplace
+            Trusted vehicle marketplace
           </span>
           <h1>AutoWorld Marketplace</h1>
           <p>
-            Buy with confidence, sell with less friction and keep every vehicle
-            decision moving through one polished platform.
+            Buy with confidence. Sell with ease.
+            <br />
+            Find inspected vehicles or list your car on one trusted marketplace.
           </p>
           <div className="landing-hero__actions">
             <Link className="btn btn--primary" to="/sell-my-car">
@@ -42,8 +43,8 @@ function HomePage() {
       <section className="landing-highlights">
         <article className="panel landing-highlight-card">
           <Search size={24} />
-          <h3>Live Inventory</h3>
-          <p>Search cars instantly by price, make, fuel type and mileage.</p>
+          <h3>Fresh cars</h3>
+          <p>Find inspected cars ready for viewing.</p>
         </article>
         <article className="panel landing-highlight-card">
           <HandCoins size={24} />

@@ -4,8 +4,8 @@ import {
   ArrowDownUp,
   BadgePercent,
   Bike,
-  Calculator,
   CarFront,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Fuel,
@@ -13,14 +13,16 @@ import {
   Gavel,
   MapPin,
   MessageCircle,
-  Sailboat,
   Search,
   SlidersHorizontal,
   Truck,
+  Wrench,
   X
 } from "lucide-react";
 import { getCars } from "../services/api";
 import { fallbackInventory, getPrimaryCarImage } from "../data/visualAssets";
+import { CAR_CATEGORY_OPTIONS } from "../constants/carCategories";
+import { getAccessoryAvailabilityLabel } from "../constants/accessoryAvailability";
 import { buildWhatsappEnquiryUrl } from "../utils/whatsapp";
 
 const defaultQuery = {
@@ -39,12 +41,14 @@ const topTabs = [
 ];
 
 const segments = [
-  { id: "vehicle", label: "Vehicle", icon: CarFront },
-  { id: "bakkie", label: "Bakkie", icon: Truck },
-  { id: "motorbike", label: "Motorbike", icon: Bike },
-  { id: "leisure", label: "Leisure", icon: Sailboat },
-  { id: "commercial", label: "Commercial", icon: Truck }
+  { id: "car", label: "Cars", icon: CarFront },
+  { id: "bakkie", label: "Bakkies", icon: Truck },
+  { id: "motorcycle", label: "Motorcycles", icon: Bike },
+  { id: "commercial", label: "Commercial", icon: Truck },
+  { id: "accessory", label: "Accessories", icon: Wrench }
 ];
+
+const validCategories = new Set(CAR_CATEGORY_OPTIONS.map((category) => category.value));
 
 const filterSections = [
   "Sort",
@@ -117,6 +121,10 @@ function getListingTypeQuery(tabId) {
   return {};
 }
 
+function getCategoryQuery(categoryId) {
+  return validCategories.has(categoryId) ? { category: categoryId } : {};
+}
+
 function getCardImages(car, index = 0) {
   const fallbackImages = fallbackInventory[index % fallbackInventory.length]?.imageUrls || [];
   const images = car?.imageUrls?.length
@@ -125,38 +133,9 @@ function getCardImages(car, index = 0) {
   return images.length ? images : [getPrimaryCarImage(car, index)];
 }
 
-function getFallbackCars(query) {
-  const search = query.search.trim().toLowerCase();
-  const brand = query.brand.trim().toLowerCase();
-  const fuelType = query.fuelType.trim().toLowerCase();
-  const maxPrice = Number(query.maxPrice || 0);
-  const maxMileage = Number(query.maxMileage || 0);
-
-  const filtered = fallbackInventory.filter((car) => {
-    const text = `${car.title} ${car.brand} ${car.model} ${car.year}`.toLowerCase();
-    if (query.listingType === "auction" && !car.isAuction) return false;
-    if (query.listingType === "special" && !car.isSpecialOffer) return false;
-    if (search && !text.includes(search)) return false;
-    if (brand && !car.brand.toLowerCase().includes(brand)) return false;
-    if (fuelType && car.fuelType !== fuelType) return false;
-    if (maxPrice && Number(car.price) > maxPrice) return false;
-    if (maxMileage && Number(car.mileage) > maxMileage) return false;
-    return true;
-  });
-
-  return [...filtered].sort((a, b) => {
-    if (query.sort === "priceAsc") return Number(a.price) - Number(b.price);
-    if (query.sort === "priceDesc") return Number(b.price) - Number(a.price);
-    if (query.sort === "mileageAsc") return Number(a.mileage) - Number(b.mileage);
-    if (query.sort === "mileageDesc") return Number(b.mileage) - Number(a.mileage);
-    if (query.sort === "oldest") return Number(a.year || 0) - Number(b.year || 0);
-    return Number(b.year || 0) - Number(a.year || 0);
-  });
-}
-
 function BuyCarsPage() {
   const [activeTopTab, setActiveTopTab] = useState("all");
-  const [activeSegment, setActiveSegment] = useState("vehicle");
+  const [activeSegment, setActiveSegment] = useState("car");
   const [queryForm, setQueryForm] = useState(defaultQuery);
   const [appliedQuery, setAppliedQuery] = useState(defaultQuery);
   const [cars, setCars] = useState([]);
@@ -170,7 +149,6 @@ function BuyCarsPage() {
   const [showFilters, setShowFilters] = useState(false);
   const [showSort, setShowSort] = useState(false);
   const [error, setError] = useState("");
-  const [isFallbackInventory, setIsFallbackInventory] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [cardImageIndexes, setCardImageIndexes] = useState({});
 
@@ -178,29 +156,25 @@ function BuyCarsPage() {
     async function loadCars() {
       setIsLoading(true);
       setError("");
-      setIsFallbackInventory(false);
       try {
         const response = await getCars({
           ...appliedQuery,
           ...getListingTypeQuery(activeTopTab),
+          ...getCategoryQuery(activeSegment),
           page,
           limit: pagination.limit
         });
-        setCars(response.data || []);
+        const liveCars = response.data || [];
+        setCars(liveCars);
         setPagination((prev) => ({ ...prev, ...(response.pagination || prev) }));
       } catch (err) {
-        const fallbackCars = getFallbackCars({
-          ...appliedQuery,
-          ...getListingTypeQuery(activeTopTab)
-        });
-        setCars(fallbackCars);
+        setCars([]);
         setPagination((prev) => ({
           ...prev,
           page: 1,
-          total: fallbackCars.length,
+          total: 0,
           totalPages: 1
         }));
-        setIsFallbackInventory(true);
         setError(err.message || "Live inventory is reconnecting.");
       } finally {
         setIsLoading(false);
@@ -209,7 +183,7 @@ function BuyCarsPage() {
 
     loadCars();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appliedQuery, page, activeTopTab]);
+  }, [appliedQuery, page, activeTopTab, activeSegment]);
 
   const activeFilterCount = useMemo(() => {
     return [
@@ -221,7 +195,6 @@ function BuyCarsPage() {
     ].filter(Boolean).length;
   }, [appliedQuery]);
 
-  const sortCount = appliedQuery.sort !== "newest" ? 1 : 0;
   const totalPages = Math.max(1, pagination.totalPages || 1);
   const currentPage = Math.min(Math.max(1, page), totalPages);
   const pageNumbers = Array.from({ length: Math.min(6, totalPages) }, (_, index) => index + 1);
@@ -383,7 +356,10 @@ function BuyCarsPage() {
               className={`market-segment ${activeSegment === segment.id ? "is-active" : ""}`}
               key={segment.id}
               type="button"
-              onClick={() => setActiveSegment(segment.id)}
+              onClick={() => {
+                setActiveSegment(segment.id);
+                setPage(1);
+              }}
             >
               <Icon size={19} />
               <span>{segment.label}</span>
@@ -403,14 +379,9 @@ function BuyCarsPage() {
             }
           />
         </label>
-        <span className="market-search-row__count">({formatCount(pagination.total)})</span>
         <button className="btn btn--primary" type="submit">
           <Search size={17} />
           Search
-        </button>
-        <button className="btn btn--ghost" type="button">
-          <Calculator size={17} />
-          Affordability
         </button>
       </form>
 
@@ -418,7 +389,7 @@ function BuyCarsPage() {
         <div className="market-controls-row__left">
           <button className="market-chip-btn" onClick={toggleFilters} type="button">
             <SlidersHorizontal size={17} />
-            Filter and sort <span>{activeFilterCount}</span>
+            Filter and sort
           </button>
           {activeFilterCount > 0 ? (
             <button className="market-clear-inline" onClick={clearFilters} type="button">
@@ -461,7 +432,7 @@ function BuyCarsPage() {
 
         <button className="market-chip-btn market-sort-trigger" onClick={toggleSort} type="button">
           <ArrowDownUp size={17} />
-          Sort <span>{sortCount}</span>
+          Sort
         </button>
       </div>
 
@@ -508,15 +479,16 @@ function BuyCarsPage() {
         ) : null}
 
         <div className="market-results">
-          {error && !isFallbackInventory ? (
+          {error ? (
             <p className="notice notice--error">{error}</p>
           ) : null}
           {isLoading ? <p>Loading inventory...</p> : null}
-          {!isLoading && cars.length === 0 ? <p>No cars found for your filters.</p> : null}
+          {!isLoading && cars.length === 0 ? <p>No listings found for your filters.</p> : null}
 
           <div className="market-grid">
             {cars.map((car, index) => {
               const cardImages = getCardImages(car, index);
+              const isAccessory = car.category === "accessory";
               const cardImageIndex = Math.min(
                 cardImageIndexes[car._id] || 0,
                 cardImages.length - 1
@@ -551,14 +523,29 @@ function BuyCarsPage() {
                     <h3>{car.title}</h3>
                     <div className="market-card__price">{formatPrice(car.price)}</div>
                     <div className="market-card__chips">
-                      <span>
-                        <Gauge size={14} />
-                        {formatCount(car.mileage)} km
-                      </span>
-                      <span>
-                        <Fuel size={14} />
-                        {car.fuelType || "Petrol"}
-                      </span>
+                      {isAccessory ? (
+                        <>
+                          <span>
+                            <Wrench size={14} />
+                            Accessory
+                          </span>
+                          <span>
+                            <CheckCircle2 size={14} />
+                            {getAccessoryAvailabilityLabel(car.availabilityStatus)}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span>
+                            <Gauge size={14} />
+                            {formatCount(car.mileage)} km
+                          </span>
+                          <span>
+                            <Fuel size={14} />
+                            {car.fuelType || "Petrol"}
+                          </span>
+                        </>
+                      )}
                       <span>
                         <MapPin size={14} />
                         {car.location || "Maseru"}
@@ -631,7 +618,6 @@ function BuyCarsPage() {
           <aside className="market-sort panel">
             <div className="sort-panel-head">
               <h3>SORT MY SEARCH</h3>
-              <div className="sort-panel-count">{sortCount}</div>
               <button type="button" onClick={() => setShowSort(false)}>
                 <X size={18} />
               </button>

@@ -1,7 +1,7 @@
+import { lazy, Suspense } from "react";
 import { Navigate, NavLink, Route, Routes } from "react-router-dom";
 import {
   Building2,
-  CarFront,
   CircleDollarSign,
   Handshake,
   Home,
@@ -10,15 +10,17 @@ import {
   Mail,
   MapPinned,
 } from "lucide-react";
-import HomePage from "./pages/HomePage";
-import BuyCarsPage from "./pages/BuyCarsPage";
-import SellMyCarPage from "./pages/SellMyCarPage";
-import CarDetailPage from "./pages/CarDetailPage";
-import AdminLoginPage from "./pages/AdminLoginPage";
-import AdminDashboardPage from "./pages/AdminDashboardPage";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { ADMIN_DASHBOARD_PATH, ADMIN_LOGIN_PATH } from "./config/adminPaths";
 import { showroomImages } from "./data/visualAssets";
+
+const HomePage = lazy(() => import("./pages/HomePage"));
+const BuyCarsPage = lazy(() => import("./pages/BuyCarsPage"));
+const SellMyCarPage = lazy(() => import("./pages/SellMyCarPage"));
+const CarDetailPage = lazy(() => import("./pages/CarDetailPage"));
+const ContactPage = lazy(() => import("./pages/ContactPage"));
+const AdminLoginPage = lazy(() => import("./pages/AdminLoginPage"));
+const AdminDashboardPage = lazy(() => import("./pages/AdminDashboardPage"));
 
 const navItems = [
   { to: "/about", label: "About", icon: Info },
@@ -44,7 +46,7 @@ const infoPages = {
   },
   about: {
     icon: Building2,
-    image: showroomImages.showroom,
+    image: showroomImages.about,
     kicker: "About AutoWorld",
     title: "A sharper way to buy and sell",
     text: "AutoWorld combines inspected stock, clear pricing and responsive support for a calmer car journey.",
@@ -101,19 +103,21 @@ function InfoStubPage({ pageKey }) {
   );
 }
 
+function RouteFallback() {
+  return (
+    <div className="route-loading" role="status">
+      Loading page...
+    </div>
+  );
+}
+
 function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
         <div className="topbar__brand">
           <NavLink to="/" className="aw-logo" aria-label="AutoWorld">
-            <span className="aw-logo__mark">
-              <CarFront size={22} />
-            </span>
-            <span>
-              <span className="aw-logo__title">AutoWorld</span>
-              <span className="aw-logo__tag">Marketplace</span>
-            </span>
+            <img src="/assets/autoworld-logo.png" alt="AutoWorld Marketplace" />
           </NavLink>
         </div>
         <nav className="topbar__nav">
@@ -134,32 +138,34 @@ function App() {
       </header>
 
       <main className="page-wrap">
-        <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/buy-a-car" element={<BuyCarsPage />} />
-          <Route path="/sell-my-car" element={<SellMyCarPage />} />
-          <Route
-            path="/finance-services"
-            element={<InfoStubPage pageKey="finance" />}
-          />
-          <Route path="/locations" element={<InfoStubPage pageKey="locations" />} />
-          <Route path="/about" element={<InfoStubPage pageKey="about" />} />
-          <Route path="/contact-us" element={<InfoStubPage pageKey="contact" />} />
-          <Route path="/investors" element={<InfoStubPage pageKey="investors" />} />
-          <Route path="/cars/:id" element={<CarDetailPage />} />
-          <Route path={ADMIN_LOGIN_PATH} element={<AdminLoginPage />} />
-          <Route
-            path={ADMIN_DASHBOARD_PATH}
-            element={
-              <ProtectedRoute>
-                <AdminDashboardPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route path="/admin" element={<Navigate to="/" replace />} />
-          <Route path="/admin/login" element={<Navigate to="/" replace />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <Suspense fallback={<RouteFallback />}>
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/buy-a-car" element={<BuyCarsPage />} />
+            <Route path="/sell-my-car" element={<SellMyCarPage />} />
+            <Route
+              path="/finance-services"
+              element={<InfoStubPage pageKey="finance" />}
+            />
+            <Route path="/locations" element={<InfoStubPage pageKey="locations" />} />
+            <Route path="/about" element={<InfoStubPage pageKey="about" />} />
+            <Route path="/contact-us" element={<ContactPage />} />
+            <Route path="/investors" element={<InfoStubPage pageKey="investors" />} />
+            <Route path="/cars/:id" element={<CarDetailPage />} />
+            <Route path={ADMIN_LOGIN_PATH} element={<AdminLoginPage />} />
+            <Route
+              path={`${ADMIN_DASHBOARD_PATH}/*`}
+              element={
+                <ProtectedRoute>
+                  <AdminDashboardPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route path="/admin" element={<Navigate to="/" replace />} />
+            <Route path="/admin/login" element={<Navigate to="/" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
       </main>
     </div>
   );
