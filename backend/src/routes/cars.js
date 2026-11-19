@@ -257,7 +257,8 @@ async function listCars(req, res, includeSoldDefault, includePrivateSeller = fal
     sort: req.query.sort,
     query: req.query,
     includeSoldDefault,
-    includeSeller: includePrivateSeller
+    includeSeller: includePrivateSeller,
+    adminCreatedOnly: !includePrivateSeller
   });
 
   return res.json({
@@ -331,7 +332,7 @@ router.get(
 
 router.get("/:id", requireDatabaseConnection, async (req, res) => {
   try {
-    const car = await findCarById(req.params.id);
+    const car = await findCarById(req.params.id, { adminCreatedOnly: true });
     if (!car) {
       return res.status(404).json({ message: "Car not found." });
     }

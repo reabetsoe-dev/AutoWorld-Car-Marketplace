@@ -115,9 +115,12 @@ function dateOrUndefined(value) {
   return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 }
 
-function buildWhere(queryParams = {}, includeSoldDefault = false) {
+function buildWhere(queryParams = {}, includeSoldDefault = false, adminCreatedOnly = false) {
   const params = [];
   const where = [];
+  if (adminCreatedOnly) {
+    where.push("c.created_by IS NOT NULL");
+  }
   const {
     brand,
     fuelType,
@@ -266,7 +269,7 @@ async function findCarById(id, options = {}) {
     `SELECT ${CAR_SELECT}${includeSeller ? `, ${sellerJoinSelect("s")}` : ""}
      FROM cars c
      ${includeSeller ? "LEFT JOIN sellers s ON s.id = c.seller_id" : ""}
-     WHERE c.id = $1
+     WHERE c.id = $1${options.adminCreatedOnly ? " AND c.created_by IS NOT NULL" : ""}
      LIMIT 1`,
     [id]
   );
@@ -278,7 +281,11 @@ async function listCars(options = {}) {
   const limit = Math.min(50, Math.max(1, Number(options.limit) || 12));
   const offset = (page - 1) * limit;
   const includeSeller = Boolean(options.includeSeller);
-  const where = buildWhere(options.query || {}, Boolean(options.includeSoldDefault));
+  const where = buildWhere(
+    options.query || {},
+    Boolean(options.includeSoldDefault),
+    Boolean(options.adminCreatedOnly)
+  );
   const countResult = await query(
     `SELECT count(*)::int AS total FROM cars c ${where.clause}`,
     where.params

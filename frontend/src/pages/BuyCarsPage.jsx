@@ -20,7 +20,7 @@ import {
   X
 } from "lucide-react";
 import { getCars } from "../services/api";
-import { fallbackInventory, getPrimaryCarImage } from "../data/visualAssets";
+import { getGalleryImages } from "../data/visualAssets";
 import { CAR_CATEGORY_OPTIONS } from "../constants/carCategories";
 import { getAccessoryAvailabilityLabel } from "../constants/accessoryAvailability";
 import { buildWhatsappEnquiryUrl } from "../utils/whatsapp";
@@ -123,14 +123,6 @@ function getListingTypeQuery(tabId) {
 
 function getCategoryQuery(categoryId) {
   return validCategories.has(categoryId) ? { category: categoryId } : {};
-}
-
-function getCardImages(car, index = 0) {
-  const fallbackImages = fallbackInventory[index % fallbackInventory.length]?.imageUrls || [];
-  const images = car?.imageUrls?.length
-    ? [...car.imageUrls, ...fallbackImages]
-    : fallbackImages;
-  return images.length ? images : [getPrimaryCarImage(car, index)];
 }
 
 function BuyCarsPage() {
@@ -252,8 +244,8 @@ function BuyCarsPage() {
     setPage(1);
   }
 
-  function showCardImage(car, index, direction) {
-    const images = getCardImages(car, index);
+  function showCardImage(car, direction) {
+    const images = getGalleryImages(car);
     if (images.length <= 1) return;
 
     setCardImageIndexes((prev) => ({
@@ -483,11 +475,13 @@ function BuyCarsPage() {
             <p className="notice notice--error">{error}</p>
           ) : null}
           {isLoading ? <p>Loading inventory...</p> : null}
-          {!isLoading && cars.length === 0 ? <p>No listings found for your filters.</p> : null}
+          {!isLoading && !error && cars.length === 0 ? (
+            <p>No listings available{activeFilterCount ? " for your filters" : ""}. Please check back soon.</p>
+          ) : null}
 
           <div className="market-grid">
-            {cars.map((car, index) => {
-              const cardImages = getCardImages(car, index);
+            {cars.map((car) => {
+              const cardImages = getGalleryImages(car);
               const isAccessory = car.category === "accessory";
               const cardImageIndex = Math.min(
                 cardImageIndexes[car._id] || 0,
@@ -500,24 +494,28 @@ function BuyCarsPage() {
                     <Link to={`/cars/${car._id}`} className="market-card__image">
                       <img src={cardImages[cardImageIndex]} alt={car.title} />
                     </Link>
-                    <button
-                      aria-label={`Show previous image for ${car.title}`}
-                      className="market-card__image-arrow market-card__image-arrow--prev"
-                      title="Previous image"
-                      type="button"
-                      onClick={() => showCardImage(car, index, -1)}
-                    >
-                      <ChevronLeft size={19} />
-                    </button>
-                    <button
-                      aria-label={`Show next image for ${car.title}`}
-                      className="market-card__image-arrow market-card__image-arrow--next"
-                      title="Next image"
-                      type="button"
-                      onClick={() => showCardImage(car, index, 1)}
-                    >
-                      <ChevronRight size={19} />
-                    </button>
+                    {cardImages.length > 1 ? (
+                      <>
+                        <button
+                          aria-label={`Show previous image for ${car.title}`}
+                          className="market-card__image-arrow market-card__image-arrow--prev"
+                          title="Previous image"
+                          type="button"
+                          onClick={() => showCardImage(car, -1)}
+                        >
+                          <ChevronLeft size={19} />
+                        </button>
+                        <button
+                          aria-label={`Show next image for ${car.title}`}
+                          className="market-card__image-arrow market-card__image-arrow--next"
+                          title="Next image"
+                          type="button"
+                          onClick={() => showCardImage(car, 1)}
+                        >
+                          <ChevronRight size={19} />
+                        </button>
+                      </>
+                    ) : null}
                   </div>
                   <div className="market-card__body">
                     <h3>{car.title}</h3>

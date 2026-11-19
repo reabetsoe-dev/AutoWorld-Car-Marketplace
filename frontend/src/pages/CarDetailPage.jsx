@@ -38,6 +38,8 @@ function CarDetailPage() {
     async function loadCar() {
       setIsLoading(true);
       setError("");
+      setCar(null);
+      setActiveImageIndex(0);
       try {
         const response = await getCarById(id);
         setCar(response);
@@ -52,7 +54,7 @@ function CarDetailPage() {
   }, [id]);
 
   const gallery = useMemo(() => {
-    return getGalleryImages(car);
+    return getGalleryImages(car).slice(0, 6);
   }, [car]);
 
   const whatsappUrl = useMemo(() => {
@@ -98,37 +100,43 @@ function CarDetailPage() {
               className="detail-main-image"
               src={gallery[activeImageIndex]}
             />
-            <button
-              aria-label="Previous vehicle image"
-              className="detail-gallery-arrow detail-gallery-arrow--prev"
-              title="Previous image"
-              type="button"
-              onClick={() => showGalleryImage(-1)}
-            >
-              <ChevronLeft size={22} />
-            </button>
-            <button
-              aria-label="Next vehicle image"
-              className="detail-gallery-arrow detail-gallery-arrow--next"
-              title="Next image"
-              type="button"
-              onClick={() => showGalleryImage(1)}
-            >
-              <ChevronRight size={22} />
-            </button>
+            {gallery.length > 1 ? (
+              <>
+                <button
+                  aria-label="Previous vehicle image"
+                  className="detail-gallery-arrow detail-gallery-arrow--prev"
+                  title="Previous image"
+                  type="button"
+                  onClick={() => showGalleryImage(-1)}
+                >
+                  <ChevronLeft size={22} />
+                </button>
+                <button
+                  aria-label="Next vehicle image"
+                  className="detail-gallery-arrow detail-gallery-arrow--next"
+                  title="Next image"
+                  type="button"
+                  onClick={() => showGalleryImage(1)}
+                >
+                  <ChevronRight size={22} />
+                </button>
+              </>
+            ) : null}
           </div>
-          <div className="detail-thumb-strip">
-            {gallery.slice(0, 6).map((imageUrl, index) => (
-              <button
-                className={`detail-thumb ${activeImageIndex === index ? "is-active" : ""}`}
-                key={imageUrl}
-                onClick={() => setActiveImageIndex(index)}
-                type="button"
-              >
-                <img alt={`thumb-${index + 1}`} src={imageUrl} />
-              </button>
-            ))}
-          </div>
+          {gallery.length > 1 ? (
+            <div className="detail-thumb-strip">
+              {gallery.map((imageUrl, index) => (
+                <button
+                  className={`detail-thumb ${activeImageIndex === index ? "is-active" : ""}`}
+                  key={imageUrl}
+                  onClick={() => setActiveImageIndex(index)}
+                  type="button"
+                >
+                  <img alt={`thumb-${index + 1}`} src={imageUrl} />
+                </button>
+              ))}
+            </div>
+          ) : null}
         </article>
 
         <aside className="panel detail-summary-card">

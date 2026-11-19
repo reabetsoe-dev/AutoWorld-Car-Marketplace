@@ -5,21 +5,22 @@ import {
   Phone,
 } from "lucide-react";
 import { showroomImages } from "../data/visualAssets";
+import { CALL_URL, CONTACT_DISPLAY_NUMBER, WHATSAPP_URL } from "../config/contact";
 
 const primaryContacts = [
   {
     icon: Phone,
     title: "Main phone",
-    value: "+266 6384 2459",
+    value: CONTACT_DISPLAY_NUMBER,
     detail: "General calls, branch help and urgent follow-up.",
-    href: "tel:+26663842459"
+    href: CALL_URL
   },
   {
     icon: MessageCircle,
     title: "WhatsApp",
-    value: "+266 6384 2459",
+    value: CONTACT_DISPLAY_NUMBER,
     detail: "Fast enquiries, valuation updates and document questions.",
-    href: "https://wa.me/26663842459"
+    href: WHATSAPP_URL
   },
   {
     icon: Mail,
